@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: alignforge-db
+    environment:
+      POSTGRES_USER: alignforge
+      POSTGRES_PASSWORD: alignforge_secret
+      POSTGRES_DB: alignforge_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alignforge -d alignforge_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: alignforge-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: alignforge-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://alignforge:alignforge_secret@db:5432/alignforge_db
+      REDIS_URL: redis://redis:6379/0
+      USE_CELERY: "true"
+      AUTO_CREATE_TABLES: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - artifacts:/app/artifacts
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: alignforge-worker
+    command: celery -A app.workers.celery_app worker --loglevel=info -Q default,training -c 2
+    environment:
+      DATABASE_URL: postgresql+asyncpg://alignforge:alignforge_secret@db:5432/alignforge_db
+      REDIS_URL: redis://redis:6379/0
+      USE_CELERY: "true"
+    volumes:
+      - ./backend:/app
+      - artifacts:/app/artifacts
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: alignforge-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  artifacts:
