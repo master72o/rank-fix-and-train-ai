@@ -33,6 +33,14 @@ MAX_TOPK_ENTROPY = math.log(DEFAULT_TOP_K)
 class PriorityWeights:
     entropy: float = 0.5
     divergence: float = 0.5
+    length: float = 0.0
+
+
+def length_ratio_divergence(len_a: int, len_b: int) -> float:
+    """Normalized log-length ratio min(1.0, |ln(max(1, L_A) / max(1, L_B))|)."""
+    la = max(1, int(len_a))
+    lb = max(1, int(len_b))
+    return float(min(1.0, abs(math.log(la / lb))))
 
 
 def token_entropy(top_logprobs: Sequence[Sequence[float]]) -> float:
@@ -67,6 +75,7 @@ def priority_score(
     divergence: float | None,
     weights: PriorityWeights = PriorityWeights(),
     entropy_scale: float = MAX_TOPK_ENTROPY,
+    length_div: float | None = None,
 ) -> float:
     """Combine uncertainty signals into a [0, 1] priority.
 
@@ -74,10 +83,19 @@ def priority_score(
     to semantic divergence alone rather than inventing an entropy value.
     """
     div = float(np.clip(divergence or 0.0, 0.0, 1.0))
+    l_div = float(np.clip(length_div or 0.0, 0.0, 1.0))
     entropies = [e for e in (entropy_a, entropy_b) if e is not None]
     if not entropies:
+        if weights.length > 0 and length_div is not None:
+            denom = weights.divergence + weights.length
+            return round((weights.divergence * div + weights.length * l_div) / denom, 6) if denom > 0 else round(div, 6)
         return round(div, 6)
     ent = float(np.clip(np.mean(entropies) / entropy_scale, 0.0, 1.0))
+    if length_div is not None and weights.length > 0:
+        total_3 = weights.entropy + weights.divergence + weights.length
+        if total_3 <= 0:
+            raise ValueError("Priority weights must sum to a positive number")
+        return round((weights.entropy * ent + weights.divergence * div + weights.length * l_div) / total_3, 6)
     total = weights.entropy + weights.divergence
     if total <= 0:
         raise ValueError("Priority weights must sum to a positive number")
@@ -103,3 +121,24 @@ def route_for_review(priorities: Sequence[float], threshold: float) -> dict[str,
         "auto_label": n - human,
         "auto_label_fraction": round((n - human) / n, 4) if n else 0.0,
     }
+
+
+def calibrate_threshold_for_budget(
+    priorities: Sequence[float], target_human_fraction: float
+) -> dict[str, float | int]:
+    """Compute the optimal priority threshold to route at most `target_human_fraction` to humans."""
+    if not 0.0 <= target_human_fraction <= 1.0:
+        raise ValueError("target_human_fraction must be in [0, 1]")
+    n = len(priorities)
+    if n == 0:
+        return {"threshold": 1.0, "total": 0, "human_review": 0, "auto_label": 0, "auto_label_fraction": 0.0}
+    if target_human_fraction == 0.0:
+        threshold = float(max(priorities)) + 1e-6
+    elif target_human_fraction == 1.0:
+        threshold = 0.0
+    else:
+        sorted_desc = sorted(priorities, reverse=True)
+        k = max(1, int(round(target_human_fraction * n)))
+        threshold = float(sorted_desc[min(k - 1, n - 1)])
+    routing = route_for_review(priorities, threshold=threshold)
+    return {"threshold": round(threshold, 6), **routing}

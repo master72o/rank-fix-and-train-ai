@@ -6,8 +6,10 @@ from app.services.active_learning import (
     token_entropy,
     cosine_similarity,
     semantic_divergence,
+    length_ratio_divergence,
     priority_score,
     route_for_review,
+    calibrate_threshold_for_budget,
     rank_queue,
     PriorityWeights,
 )
@@ -75,3 +77,32 @@ def test_rank_queue():
     ]
     ranked = rank_queue(items, key=lambda x: x["priority"])
     assert [x["id"] for x in ranked] == ["b", "c", "a"]
+
+
+def test_length_ratio_divergence_and_three_signal_priority():
+    assert length_ratio_divergence(100, 100) == 0.0
+    # e^1 ratio -> saturated at 1.0
+    assert length_ratio_divergence(300, 100) == 1.0
+    mid_div = length_ratio_divergence(150, 100)
+    assert 0.35 <= mid_div <= 0.45
+
+    weights = PriorityWeights(entropy=0.4, divergence=0.4, length=0.2)
+    score = priority_score(
+        entropy_a=1.609,
+        entropy_b=1.609,
+        divergence=0.5,
+        weights=weights,
+        length_div=1.0,
+    )
+    # 0.4*1.0 + 0.4*0.5 + 0.2*1.0 = 0.8
+    assert pytest.approx(score, abs=1e-2) == 0.8
+
+
+def test_calibrate_threshold_for_budget():
+    priorities = [0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05]
+    res = calibrate_threshold_for_budget(priorities, target_human_fraction=0.3)
+    assert res["total"] == 10
+    assert res["human_review"] == 3
+    assert res["auto_label"] == 7
+    assert res["auto_label_fraction"] == 0.7
+    assert res["threshold"] == 0.75

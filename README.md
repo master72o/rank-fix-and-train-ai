@@ -175,10 +175,12 @@ pytest tests/ -v
 
 AlignForge test suite covers:
 - Active learning entropy and semantic divergence scoring.
+- Length-ratio divergence scoring and budget-constrained queue threshold calibration.
 - Cohen's Kappa against `scikit-learn` gold standard calculations.
 - Landis & Koch interpretation thresholds.
 - Bootstrap 95% confidence intervals.
 - Position consistency rate logic under A/B and B/A swapping.
+- DPO preference pair construction (golden human rewrites, majority voting, and judge consistency filtering) and 95% Wilson win-rate intervals.
 
 ---
 
